@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <base target="_top">
+    <link href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css" rel="stylesheet">
+    <?!= include('Stylesheet'); ?>
+</head>
+<body>
+    <div class="container app-container">
+        <div id="loading" class="text-center">
+            <div class="spinner-border" role="status"><span class="sr-only">Loading...</span></div>
+            <p>กำลังโหลดข้อมูล...</p>
+        </div>
+
+        <div id="appContent" style="display: none;">
+            <div class="d-flex justify-content-between align-items-center mb-4">
+                 <h4 id="welcomeMessage"></h4>
+                 <a href="<?= ScriptApp.getService().getUrl(); ?>" class="btn btn-sm btn-outline-secondary">ออกจากระบบ</a>
+            </div>
+           
+            <div class="card mb-4">
+                <div class="card-body">
+                    <h5 class="card-title">สรุปสิทธิ์การลา</h5>
+                    <p class="mb-1"><strong>สิทธิ์วันลาทั้งหมด:</strong> <span id="leaveEntitlement" class="font-weight-bold text-primary"></span> วัน</p>
+                    <p class="mb-1"><strong>วันที่ลาไปแล้ว:</strong> <span id="leaveUsed" class="font-weight-bold text-warning"></span> วัน</p>
+                    <p class="mb-0"><strong>สิทธิ์คงเหลือ:</strong> <span id="leaveRemaining" class="font-weight-bold text-success"></span> วัน</p>
+                </div>
+            </div>
+
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <h5>จองวันลา</h5>
+                    <div class="form-group">
+                        <label for="leaveDate">เลือกวันที่</label>
+                        <input type="date" id="leaveDate" class="form-control">
+                    </div>
+                    
+                    <div id="dayInfo" class="mb-3" style="display:none;">
+                         <p class="mb-1"><strong>โควต้าที่ลาได้ในวันนี้:</strong> <span id="dayQuota"></span></p>
+                         
+                         <h6 id="bookedListHeader" style="display: none;">รายชื่อผู้ที่ลาในวันนี้:</h6>
+                         <ul id="bookedList" class="list-group" style="display: none;"></ul>
+                    </div>
+                    
+                    <div id="bookingForm" style="display:none;">
+                        <hr>
+                        <h6>กรอกข้อมูลการลา</h6>
+                        <div class="form-group">
+                            <label for="leaveType">ประเภทการลา</label>
+                            <select id="leaveType" class="form-control"></select>
+                        </div>
+                         <div class="form-group" id="otherReasonGroup" style="display: none;">
+                            <label for="otherReason">กรุณาระบุเหตุผล</label>
+                            <input type="text" id="otherReason" class="form-control" placeholder="เช่น ลากิจ, ลาป่วย">
+                        </div>
+                        <button id="bookButton" class="btn btn-primary btn-block">ยืนยันการจอง</button>
+                    </div>
+
+                     <div id="dayOffMessage" class="alert alert-info" style="display:none;"></div>
+                     <div id="limitReachedMessage" class="alert alert-warning" style="display:none;"></div>
+                </div>
+
+                <div class="col-md-6">
+                    <h5>การจองของฉัน</h5>
+                    <div id="myBookings">
+                        <p id="noBookings" class="text-muted">ยังไม่มีการจอง</p>
+                        <ul id="myBookingsList" class="list-group"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const employeeId = '<?= employeeId ?>';
+        let leaveEntitlement = 0;
+        let myBookings = [];
+
+        document.addEventListener("DOMContentLoaded", () => google.script.run.withSuccessHandler(onUserData).getUserData(employeeId));
+
+        function onUserData(data) {
+            if (data && data.userData) {
+                document.getElementById("loading").style.display = "none";
+                document.getElementById("appContent").style.display = "block";
+                
+                document.getElementById("welcomeMessage").innerText = `สวัสดี, ${data.userData.name}`;
+                leaveEntitlement = data.userData.leaveEntitlement;
+                myBookings = data.bookings;
+                
+                const leaveTypeDropdown = document.getElementById('leaveType');
+                leaveTypeDropdown.innerHTML = '';
+                if (data.leaveTypes && data.leaveTypes.length > 0) {
+                    data.leaveTypes.forEach(type => {
+                        const option = document.createElement('option');
+                        option.value = type;
+                        option.textContent = type;
+                        leaveTypeDropdown.appendChild(option);
+                    });
+                }
+                const otherOption = document.createElement('option');
+                otherOption.value = 'Other';
+                otherOption.textContent = 'Other';
+                leaveTypeDropdown.appendChild(otherOption);
+
+                updateLeaveSummary();
+                updateMyBookingsList();
+            } else {
+                alert("ไม่พบข้อมูลผู้ใช้ หรือเกิดข้อผิดพลาดในการโหลดข้อมูล: " + (data.error || 'Unknown error'));
+                document.getElementById("loading").innerHTML = '<p class="text-danger">ไม่สามารถโหลดข้อมูลผู้ใช้ได้ กรุณาตรวจสอบรหัสพนักงานในชีต 1A1B</p>';
+            }
+        }
+        
+        function updateLeaveSummary() {
+            const used = myBookings.length;
+            const remaining = leaveEntitlement - used;
+            document.getElementById('leaveEntitlement').innerText = leaveEntitlement;
+            document.getElementById('leaveUsed').innerText = used;
+            document.getElementById('leaveRemaining').innerText = remaining;
+
+            const limitMsg = document.getElementById('limitReachedMessage');
+            if (remaining <= 0) {
+                 limitMsg.innerText = 'คุณใช้สิทธิ์การลาครบแล้ว';
+                 limitMsg.style.display = 'block';
+            } else {
+                 limitMsg.style.display = 'none';
+            }
+        }
+
+        function updateMyBookingsList() {
+             const list = document.getElementById("myBookingsList");
+             list.innerHTML = "";
+             if (myBookings.length > 0) {
+                 document.getElementById("noBookings").style.display = "none";
+                 myBookings.forEach(booking => {
+                     const dateParts = booking.date.split('-'); // [YYYY, MM, DD]
+                     const displayDate = `${parseInt(dateParts[2])}/${parseInt(dateParts[1])}/${dateParts[0]}`;
+
+                     const li = document.createElement("li");
+                     li.className = "list-group-item d-flex justify-content-between align-items-center";
+                     li.innerHTML = `<span>${displayDate} (<strong>${booking.type}</strong>)</span>
+                                   <button class="btn btn-sm btn-danger" onclick="cancelBooking('${booking.date}')">ยกเลิก</button>`;
+                     list.appendChild(li);
+                 });
+             } else {
+                 document.getElementById("noBookings").style.display = "block";
+             }
+        }
+
+        document.getElementById("leaveDate").addEventListener("change", function () {
+            const selectedDate = this.value;
+            document.getElementById("dayInfo").style.display = "none";
+            document.getElementById("bookingForm").style.display = "none";
+            document.getElementById("dayOffMessage").style.display = "none";
+            
+            // *** นี่คือส่วนที่แก้ไข ***
+            document.getElementById("bookedListHeader").style.display = "none"; // ซ่อนหัวข้อ
+            document.getElementById("bookedList").style.display = "none";     // ซ่อนลิสต์
+
+            if (selectedDate) {
+                 google.script.run.withSuccessHandler(onDayData).getDayData(employeeId, selectedDate);
+            }
+        });
+
+        // *** นี่คือฟังก์ชันที่แก้ไขตรรกะ ***
+        function onDayData(data) {
+            document.getElementById("dayInfo").style.display = "block";
+            
+            const quotaSpan = document.getElementById("dayQuota");
+            if (data.quota === "N/A") {
+                quotaSpan.innerHTML = '<strong class="text-danger">ไม่อนุมัติให้จองลา</strong>';
+            } else {
+                quotaSpan.innerHTML = `<strong class="text-primary">${data.quota}</strong> คน`;
+            }
+            
+            const bookedList = document.getElementById("bookedList");
+    
+            // *** นี่คือตรรกะที่ถูกต้อง ***
+            const bookedHeader = document.getElementById("bookedListHeader");
+            bookedList.innerHTML = ""; 
+
+            if (data.bookedUsers.length > 0 && data.quota !== "N/A") {
+                bookedHeader.style.display = "block";
+                bookedList.style.display = "block";
+                data.bookedUsers.forEach(user => {
+                    bookedList.innerHTML += `<li class="list-group-item">${user.name} (${user.leaveType})</li>`;
+                });
+            } else {
+                bookedHeader.style.display = "none";
+                bookedList.style.display = "none";
+            }
+            
+            // 3. ตรรกะการแสดงฟอร์มจอง
+            if (data.isUserDayOff) {
+                const msg = document.getElementById("dayOffMessage");
+                msg.innerText = "คุณไม่สามารถลาในวันนี้ได้ เนื่องจากเป็นวันหยุด (DAY OFF) ของคุณ";
+                msg.style.display = "block";
+                document.getElementById("bookingForm").style.display = "none";
+            } else if ((leaveEntitlement - myBookings.length) > 0) {
+                if (data.quota !== "N/A") { 
+                  document.getElementById("bookingForm").style.display = "block";
+                }
+                document.getElementById("dayOffMessage").style.display = "none";
+            } else {
+                document.getElementById("limitReachedMessage").style.display = "block";
+                document.getElementById("bookingForm").style.display = "none";
+            }
+        }
+
+        document.getElementById('leaveType').addEventListener('change', function() {
+            document.getElementById('otherReasonGroup').style.display = this.value === 'Other' ? 'block' : 'none';
+        });
+
+        document.getElementById("bookButton").addEventListener("click", function () {
+            const date = document.getElementById("leaveDate").value;
+            const type = document.getElementById("leaveType").value;
+            const otherReason = document.getElementById("otherReason").value;
+
+            if (type === 'Other' && !otherReason.trim()) {
+                alert('กรุณาระบุเหตุผลการลา');
+                return;
+            }
+
+            this.disabled = true;
+            this.innerText = "กำลังจอง...";
+            google.script.run.withSuccessHandler(onBookingResult).bookLeave(employeeId, date, type, otherReason);
+        });
+
+        function onBookingResult(response) {
+            const btn = document.getElementById("bookButton");
+            btn.disabled = false;
+            btn.innerText = "ยืนยันการจอง";
+
+            if (response.status === "success") {
+                alert("จองวันลาสำเร็จ!");
+                document.getElementById("leaveDate").value = "";
+                document.getElementById("dayInfo").style.display = "none";
+                document.getElementById("bookingForm").style.display = "none";
+                google.script.run.withSuccessHandler(onUserData).getUserData(employeeId);
+            } else {
+                alert("เกิดข้อผิดพลาด: " + response.message);
+            }
+        }
+        
+        function cancelBooking(dateString) {
+             if (confirm(`คุณต้องการยกเลิกการลาวันที่ ${dateString} ใช่หรือไม่?`)) {
+                 google.script.run.withSuccessHandler(onCancelResult).cancelLeave(employeeId, dateString);
+             }
+        }
+
+        function onCancelResult(response) {
+            if (response.status === "success") {
+                alert("ยกเลิกการจองสำเร็จ!");
+                google.script.run.withSuccessHandler(onUserData).getUserData(employeeId);
+            } else {
+                alert("เกิดข้อผิดพลาด: " + response.message);
+            }
+        }
+    </script>
+</body>
+</html>
